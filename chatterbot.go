@@ -19,50 +19,39 @@ const (
 )
 
 type CleverbotSession struct {
-	Headers		map[string]string
-	Vars		map[string]string
 	Conversation	string
 	Cookies		*cookiejar.Jar
+	HttpClient	*http.Client
 }
 
-func NewCleverbot(lang string) *CleverbotSession {
-
-	if len(lang) < 2 {
-		lang = "en"
-	}
+func NewCleverbot() *CleverbotSession {
 
 	session := &CleverbotSession{}
-
-	session.Headers = make(map[string]string)
-	session.Headers["Accept-Language"] = lang + ";q=1.0"
-
-	session.Vars = make(map[string]string)
-	session.Vars["islearning"] = "1";
-	session.Vars["icognoid"] = "wsf";
-
 	session.Cookies, _ = cookiejar.New(nil)
+	session.HttpClient = &http.Client{
+		Jar: session.Cookies,
+	}
 
-	Request(cleverbotBaseUrl, session.Cookies, "", nil)
+	// initial request (get cookies for session)
+	session.Request(cleverbotBaseUrl, "")
 
 	return session
 }
 
 func (session *CleverbotSession) ThinkThrough(though string) string {
 
-	session.Vars["stimulus"] = though
-
-	// our digest will always contain of this string, but cut at the cleverbotEndIndex
-	digestString := url.QueryEscape(though) + "&islearning=" + session.Vars["islearning"] + "&icognoid=";
+	// our digest will always contain this string, but cut at the cleverbotEndIndex
+	digestString := url.QueryEscape(though) + "&islearning=1&icognoid=wsf";
 	digest := digestString[0:cleverbotEndIndex]
-	session.Vars["icognocheck"] = fmt.Sprintf("%x", md5.Sum([]byte(digest)))
+	icognocheck := fmt.Sprintf("%x", md5.Sum([]byte(digest)))
 
 	// our default params; always the same for the first request
-	params := "stimulus=" + url.QueryEscape(session.Vars["stimulus"]) +
-	"&islearning=" + url.QueryEscape(session.Vars["islearning"]) +
-	"&icognoid=" + url.QueryEscape(session.Vars["icognoid"]) +
-	"&icognocheck=" + url.QueryEscape(session.Vars["icognocheck"])
+	params := "stimulus=" + url.QueryEscape(though) +
+	"&islearning=1" +
+	"&icognoid=wsf" +
+	"&icognocheck=" + url.QueryEscape(icognocheck)
 
-	// if there is already a conversation going, we need to add the vTexts, even if empty
+	// if there is already a conversation going, we need to add the vTexts, even empty ones
 	if len(session.Conversation) > 0 {
 
 		vTexts := strings.Split(session.Conversation, ",")
@@ -91,17 +80,22 @@ func (session *CleverbotSession) ThinkThrough(though string) string {
 	}
 	session.Conversation += though
 
-	response, err := Request(cleverbotServiceUrl, session.Cookies, params, session.Headers)
+	response, err := session.Request(cleverbotServiceUrl, params)
 	if err != nil {
 		log.Println(err.Error())
 		return ""
 	}
 
-	session.Conversation += "," + response
-	return response
+	if response != "" {
+		session.Conversation += "," + response
+		return response
+	}
+
+	fmt.Println("missing response")
+	return ""
 }
 
-func Request(uri string, cookies *cookiejar.Jar, params string, headers map[string]string) (string, error) {
+func (session *CleverbotSession) Request(uri string, params string) (string, error) {
 
 	var request *http.Request
 
@@ -112,16 +106,11 @@ func Request(uri string, cookies *cookiejar.Jar, params string, headers map[stri
 		request.Header.Add("Content-type", "application/x-www-form-urlencoded")
 	}
 
-	if len(headers) > 0 {
-		for key, value := range headers {
-			request.Header.Add(key, value)
-		}
-	}
+	// set language statically, because it doesn't seem to change anything
+	request.Header.Add("Accept-Language", "en;q=1.0")
 
-	httpClient := &http.Client{
-		Jar: cookies,
-	}
-	resp, err := httpClient.Do(request)
+	session.HttpClient.Jar = session.Cookies
+	resp, err := session.HttpClient.Do(request)
 	if err != nil {
 		return "", err
 	}
